@@ -289,7 +289,7 @@ http_header_end(const char *header, unsigned long len)
 }
 
 static char*
-truncate_packet(const char *raw_data){
+truncate_packet(const struct pcap_pkthdr *pkthdr, const char *raw_data){
 	char *tp=NULL, *ipend=NULL;
 	ethhdr_t*	ethh = NULL;
 	iphdr_t*	iph = NULL;
@@ -308,34 +308,25 @@ truncate_packet(const char *raw_data){
 	iphl=(iph->ihl<<2);			// IP header length
 	ipttl=ntohs(iph->tot_len);	// IP total length: header + data
 	if(IP_TYPE_TCP == iph->protocol){
+		// Store packets up to TCP header
 		tcph=(char*)iph+iphl;
 		tcphl=(tcph->th_off<<2);	// TCP header length
 		tcpdl=ipttl-iphl-tcphl;		// TCP data length
-		u_int16_t thdp = ntohs(tcph->th_dport);
-		u_int16_t thsp = ntohs(tcph->th_sport);
-		if(80==thdp || 8080==thdp || 3128==thdp || \
-			80==thsp || 8080==thsp || 3128==thsp){
-			httph=(char*)tcph+tcphl;
-			int flag = is_http_message((char*)httph, tcpdl);
-		    if(0 == flag){
-				return (char*)tcph+tcphl-1;
-			}else{
-				return http_header_end((char*)httph, tcpdl);
-			}
-		}else if(443==thdp || 443==thsp){
+		httph=(char*)tcph+tcphl;
+		int flag = is_http_message((char*)httph, tcpdl);
+	    if(0 == flag){	// not http
 			return (char*)tcph+tcphl-1;
+		}else{
+			// Store packets up to HTTP header
+			return http_header_end((char*)httph, tcpdl);
 		}
 	}else if(IP_TYPE_UDP == iph->protocol){
+		// Store packets up to UDP header
 		udph=(char*)iph+iphl;
-		u_int16_t uhdp = ntohs(udph->uh_dport);
-		u_int16_t uhsp = ntohs(udph->uh_sport);
-		if(443==uhdp || 443==uhsp){
-			return (char*)udph+sizeof(udphdr_t)-1;
-		}else{
-			return NULL;
-		}
+		return (char*)udph+sizeof(udphdr_t)-1;
 	}else{
-		return NULL;
+		// For other protocols out of TCP and UDP, store entire packets.
+		return (char*)raw_data+pkthdr->caplen-1;
 	}
 }
 
@@ -394,17 +385,12 @@ main(int argc, char *argv[]){
 	if (tracefile != NULL){
 		// work with offline file
 		cap = pcap_open_offline(tracefile, errbuf);
-		if( cap == NULL){
-			printf("%s\n",errbuf);
-			exit(1);
-		}
 	}else if(interface != NULL){
 		// work with interface
 		cap = pcap_open_live(interface, 65535, 0, 1000, errbuf);
-		if( cap == NULL){
-			printf("%s\n",errbuf);
-			exit(-1);
-		}
+	}
+	if( cap == NULL){
+		printf("%s\n",errbuf); exit(-1);
 	}
 	
 	FILE* f;
@@ -424,19 +410,17 @@ main(int argc, char *argv[]){
 	int res;
 	while(0 == if_go_on()){
 		res = pcap_next_ex(cap, &pkthdr, &raw);
-		if( -1 == res){
+		if( -1 == res || 0 == res){
+			printf("Do not worry, I'm trying to catch data...\n");
 			continue;
-		}else if(0 == res){
-			continue;
-		}else if(-2 == res){
+		} else if(-2 == res){
 			printf("No more packets.\n");
-			return (-1);
-		}else{
+			break;
+		} else{
 			// without problems
-			data_end = truncate_packet(raw);
-			if(NULL == data_end){
-				continue;
-			}
+			data_end = truncate_packet(pkthdr, raw);
+			if( NULL == data_end ) {continue;}
+
 			var_pktcnt++;
 			pkthdr->caplen = data_end - raw + 1;
 			
