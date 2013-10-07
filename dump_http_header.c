@@ -37,8 +37,8 @@ print_usage(const char* pro_name)
 	printf("i.e., the payload of HTTP is dropped if unencripted content\n");
 	printf("carried, otherwise, only TCP header is recorded.\n\n");
 	printf("Usage: %s [-h] [-c count] [-C file_size]\n", pro_name);
-	printf("[-G seconds] [-i interface | -r file] [-w file]\n\n");
-	printf("All these options are consistent with TCPDUMP.\n");
+	printf("[-g duration] [-i interface | -r file] [-w file]\n\n");
+	printf("Most of these options are consistent with TCPDUMP.\n");
 }
 
 static int
@@ -337,7 +337,7 @@ main(int argc, char *argv[]){
 	char* dumpfile = NULL;
 	// Parse options
 	int opt;
-	const char *optstr = "c:C:G:i:r:w:h";
+	const char *optstr = "c:C:g:i:r:w:h";
 	while((opt = getopt(argc, argv, optstr)) != -1){
 		switch(opt){
 			case 'h':
@@ -349,7 +349,7 @@ main(int argc, char *argv[]){
 			case 'C':
 				limit_filesize = atoi(optarg);
 				break;
-			case 'G':
+			case 'g':
 				limit_seconds = atoi(optarg);
 				break;
 			case 'i':
