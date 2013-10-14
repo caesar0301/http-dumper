@@ -27,28 +27,19 @@ static long limit_filesize = -1;
 static long limit_seconds = -1;
 static long var_pktcnt = 0;
 static long var_filesize = 0;
-static long var_seconds = 0;
 static time_t t_start, t_now;
+static FILE *logger = NULL;
 
 static void print_usage(const char* pro_name) {
-	printf("This program aims to dump the traffic with HTTP headers,\n");
-	printf("i.e., the payload of HTTP is dropped if unencripted content\n");
-	printf("carried, otherwise, only TCP header is recorded.\n\n");
+	printf("This program aims to dump the traffic only with protocol headers,\n");
+	printf("For HTTP traffic: store data up to HTTP header and HTTP payload is truncated;\n");
+	printf("For TCP (non-HTTP) or UDP traffic: store data up to TCP/UDP header and the payload is truncated;\n");
+	printf("For other protocol traffic: the whole packet is stored.\n");
+	printf("Version 1.0\n");
+	printf("Author Xiaming Chen, chenxm35@gmail.com\n\n");
 	printf("Usage: %s [-h] [-c count] [-C file_size]\n", pro_name);
 	printf("[-g duration] [-i interface | -r file] [-w file]\n\n");
 	printf("Most of these options are consistent with TCPDUMP.\n");
-}
-
-static int if_go_on(void) {
-	time(&t_now);
-	var_seconds = (int) t_now - t_start;
-	if (limit_pktcnt != -1 && var_pktcnt >= limit_pktcnt) {
-		return -1;
-	} else if (limit_seconds != -1 && var_seconds >= limit_seconds) {
-		return -1;
-	} else {
-		return 0;
-	}
 }
 
 static void nprint(const char* data, int dl) {
@@ -294,10 +285,20 @@ truncate_packet(const struct pcap_pkthdr *pkthdr, const char *raw_data) {
 	}
 }
 
+static int if_continue(void) {
+	if (limit_pktcnt != -1 && var_pktcnt >= limit_pktcnt) 
+	{ return -1;}
+	time(&t_now);
+	if (limit_seconds != -1 && difftime(t_now, t_start) >= limit_seconds)
+	{ return -1;}
+	return 0;
+}
+
 int main(int argc, char *argv[]) {
 	char* interface = NULL;
 	char* tracefile = NULL;
 	char* dumpfile = NULL;
+
 	// Parse options
 	int opt;
 	const char *optstr = "c:C:g:i:r:w:h";
@@ -335,8 +336,12 @@ int main(int argc, char *argv[]) {
 		exit(-1);
 	}
 
+	logger = fopen("httpdump.log", "wb");
+	fprintf(logger, "Running...\n");
+
 	// Processing traffic
 	time(&t_start);
+	fprintf(logger, "Start timestamp (UNIX) %d\n", (int)t_start);
 
 	char errbuf[PCAP_ERRBUF_SIZE];
 	char *raw, *data_end;
@@ -347,13 +352,15 @@ int main(int argc, char *argv[]) {
 
 	if (tracefile != NULL) {
 		// work with offline file
+		fprintf(logger, "Opening offline pcap file: %s\n", tracefile);
 		cap = pcap_open_offline(tracefile, errbuf);
 	} else if (interface != NULL) {
 		// work with interface
+		fprintf(logger, "Opening interface: %s\n", interface);
 		cap = pcap_open_live(interface, 65535, 0, 1000, errbuf);
 	}
 	if (cap == NULL) {
-		printf("%s\n", errbuf);
+		fprintf(logger, "%s\n", errbuf);
 		exit(-1);
 	}
 
@@ -369,16 +376,17 @@ int main(int argc, char *argv[]) {
 		strcpy(fname, "standard output");
 		f = stdout;
 	}
+	fprintf(logger, "Dumping to file: %s\n", fname);
 	file_cnt++;
 
 	int res;
-	while (0 == if_go_on()) {
+	while (0 == if_continue()) {
 		res = pcap_next_ex(cap, &pkthdr, &raw);
 		if (-1 == res || 0 == res) {
-			printf("Do not worry, I'm trying to catch data...\n");
+			fprintf(logger, "Do not worry, I'm trying to catch data...\n");
 			continue;
 		} else if (-2 == res) {
-			printf("No more packets.\n");
+			fprintf(logger, "No more packets.\n");
 			break;
 		} else {
 			// without problems
@@ -402,10 +410,13 @@ int main(int argc, char *argv[]) {
 				} else {
 					pcap_dump_flush(dumper);
 					pcap_dump_close(dumper);
+					// Open a new file to dump
 					sprintf(fname, "%s.%d", dumpfile, ++file_cnt);
 					dumper = pcap_dump_open(cap, fname);
+					fprintf(logger, "Dumping to file: %s\n", fname);
 					f = pcap_dump_file(dumper);
 					pcap_dump(f, pkthdr, raw);
+					// Reset file size counter
 					var_filesize = pkthdr->caplen;
 				}
 			}
@@ -415,9 +426,15 @@ int main(int argc, char *argv[]) {
 	if (dumper != NULL) {
 		pcap_dump_flush(dumper);
 		pcap_dump_close(dumper);
+		fprintf(logger, "Closing pcap dumpper instance.\n");
 	}
 
-	printf("%d packets captured, time elapsed %d seconds\n", var_pktcnt,
-			var_seconds);
+	time(&t_now);
+	fprintf(logger, "%d packets captured, time elapsed %.3f seconds\n", 
+			var_pktcnt, difftime(t_now, t_start));
+	fprintf(logger, "End timestamp (UNIX) %d\n", (int)t_now);
+
+	if(logger != NULL) {fclose(logger);}
+
 	return 0;
 }
